@@ -9,6 +9,7 @@ import os
 import warnings
 import tkinter as tk
 from tkinter import messagebox, simpledialog
+from pymsgbox import password
 import requests
 import threading
 
@@ -127,8 +128,19 @@ def main():
     
     try:
         manager = RobloxAccountManager(password=password)
-        import api_server
-        threading.Thread(target=api_server.start_api, args=(manager,), daemon=True).start()
+        
+        # === API CONTROLLED BY GUI (new API tab) ===
+        if manager.get_secure_setting("api_enabled", True):
+            import api_server
+            threading.Thread(target=api_server.start_api, args=(manager,), daemon=True).start()
+        else:
+            print("⚠️  API disabled (enable in Settings → API tab and restart)")
+    except ValueError as e:
+        messagebox.showerror("Error", "Password is invalid. Please try again.")
+        return
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to initialize: {e}")
+        return
     except ValueError as e:
         messagebox.showerror("Error", "Password is invalid. Please try again.")
         return
