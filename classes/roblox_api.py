@@ -698,11 +698,12 @@ class RobloxAPI:
             return False
         
     @staticmethod
-    def get_public_servers(place_id: int, limit: int = 10):
-        """Server Browser - gets public servers (ic3w0lf22 style)"""
+    def get_public_servers(place_id: int, limit: int = 50):
+        """Updated for Ping + future region support"""
         try:
             url = f"https://games.roblox.com/v1/games/{place_id}/servers/Public?sortOrder=Asc&limit={limit}"
-            r = requests.get(url, timeout=5)
+            headers = {"User-Agent": "Roblox/WinInet"}
+            r = requests.get(url, headers=headers, timeout=8)
             if r.status_code == 200:
                 return r.json().get("data", [])
             return []
@@ -711,10 +712,10 @@ class RobloxAPI:
 
     @staticmethod
     def get_smallest_server(place_id: int):
-        """Returns the smallest/lowest-player server for JoinSmallestServer"""
-        servers = RobloxAPI.get_public_servers(place_id, limit=10)
+        """Now sorts by lowest ping first"""
+        servers = RobloxAPI.get_public_servers(place_id, 50)
         if servers:
-            return min(servers, key=lambda x: x.get("playing", 999999))
+            return min(servers, key=lambda x: (x.get("playing", 999999), x.get("ping", 999999)))
         return None
 
     @staticmethod

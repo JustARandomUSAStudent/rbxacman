@@ -11,7 +11,7 @@ def start_api(mgr):
     global manager
     manager = mgr
     port = int(manager.get_secure_setting("api_port", 6969))
-    print(f"✅ API Server started on http://127.0.0.1:{port}")
+    print(f"API Server started on http://127.0.0.1:{port}")
     print(f"   → Open http://127.0.0.1:{port}/docs for interactive Swagger UI")
     uvicorn.run("api_server:app", host="127.0.0.1", port=port, log_level="warning")
 
@@ -20,11 +20,11 @@ def check_password(password: str | None):
         if password != manager.get_secure_setting("api_password", ""):
             raise HTTPException(401, "Invalid API password")
 
-# Core endpoints (Launch, Follow, Block, etc.) - kept from before
 @app.get("/LaunchAccount")
 async def launch_account(Account: str = Query(...), PlaceId: int = Query(...), JobId: str = Query(None), Password: str = Query(None)):
     check_password(Password)
-    if not manager or Account not in manager.accounts: raise HTTPException(404, f"Account '{Account}' not found")
+    if not manager or Account not in manager.accounts:
+        raise HTTPException(404, f"Account '{Account}' not found")
     success = manager.launch_roblox(username=Account, game_id=PlaceId, job_id=JobId or "")
     return {"status": "success" if success else "failed", "account": Account}
 
@@ -67,7 +67,6 @@ async def get_accounts_json():
     safe = {u: {k:v for k,v in d.items() if k != "cookie"} for u,d in manager.accounts.items()}
     return JSONResponse(content=safe)
 
-# Server Browser endpoints (used by Utilities tab)
 @app.get("/GetPublicServers")
 async def get_public_servers(PlaceId: int = Query(...), Limit: int = Query(10), Password: str = Query(None)):
     check_password(Password)
@@ -78,10 +77,10 @@ async def get_public_servers(PlaceId: int = Query(...), Limit: int = Query(10), 
 async def join_smallest_server(Account: str = Query(...), PlaceId: int = Query(...), Password: str = Query(None)):
     check_password(Password)
     if not manager or Account not in manager.accounts: raise HTTPException(404, f"Account '{Account}' not found")
-    server = RobloxAPI.get_smallest_server(PlaceId)
-    if not server or not server.get("id"): raise HTTPException(404, "No public servers found")
-    success = manager.launch_roblox(username=Account, game_id=PlaceId, job_id=server["id"])
-    return {"status": "success" if success else "failed", "account": Account, "jobId": server["id"]}
+    server_id = RobloxAPI.get_smallest_server(PlaceId)
+    if not server_id: raise HTTPException(404, "No servers found")
+    success = manager.launch_roblox(username=Account, game_id=PlaceId, job_id=server_id)
+    return {"status": "success" if success else "failed", "jobId": server_id}
 
 @app.get("/status")
 async def status():

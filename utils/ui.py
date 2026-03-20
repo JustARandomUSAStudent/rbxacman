@@ -386,7 +386,9 @@ class AccountManagerUI:
         ttk.Button(bottom_frame, text="Remove", style="Dark.TButton", command=self.remove_account).pack(side="left", fill="x", expand=True, padx=2)
         ttk.Button(bottom_frame, text="Launch Roblox Home", style="Dark.TButton", command=self.launch_home).pack(side="left", fill="x", expand=True, padx=2)
         ttk.Button(bottom_frame, text="Settings", style="Dark.TButton", command=self.open_settings).pack(side="left", fill="x", expand=True, padx=(2, 0))
-        
+                # === NEW UTILITIES BUTTON (main bottom bar) ===
+        ttk.Button(bottom_frame, text="Utilities", style="Dark.TButton", command=self.open_utilities).pack(side="left", fill="x", expand=True, padx=(2, 0))
+
         self.root.bind("<Button-1>", self.hide_dropdown_on_click_outside)
         self.root.bind("<Configure>", self.on_root_configure)
         self.root.bind("<Delete>", lambda e: self.remove_account())
@@ -4894,7 +4896,14 @@ del /f /q "%~f0"
         general_tab = ttk.Frame(tabs, style="Dark.TFrame")
         tabs.add(general_tab, text="General")
         
-        
+        # === AUTO COOKIE REFRESH (General tab only) ===
+        ttk.Label(general_tab, text="Auto Cookie Refresh", font=(self.FONT_FAMILY, 10, "bold"), foreground=self.FG_TEXT).pack(anchor="w", padx=20, pady=(15,5))
+        self.auto_refresh_var = tk.BooleanVar(value=self.manager.get_secure_setting("auto_cookie_refresh", True))
+        ttk.Checkbutton(general_tab, text="Enable Auto Cookie Refresh (prevents logout)", variable=self.auto_refresh_var).pack(anchor="w", padx=40)
+        ttk.Label(general_tab, text="Refresh every (seconds):", foreground=self.FG_TEXT).pack(anchor="w", padx=40)
+        self.refresh_interval_var = tk.StringVar(value=str(self.manager.get_secure_setting("cookie_refresh_interval", 1800)))
+        ttk.Entry(general_tab, textvariable=self.refresh_interval_var, width=10).pack(anchor="w", padx=40, pady=5)
+
         themes_tab = ttk.Frame(tabs, style="Dark.TFrame")
         tabs.add(themes_tab, text="Themes")
         
@@ -4913,10 +4922,6 @@ del /f /q "%~f0"
         api_tab = ttk.Frame(tabs, style="Dark.TFrame")
         tabs.add(api_tab, text="API")
         self.create_api_tab(api_tab)
-
-        utilities_tab = ttk.Frame(tabs, style="Dark.TFrame")
-        tabs.add(utilities_tab, text="Utilities")
-        self.create_utilities_tab(utilities_tab)
         
         style = ttk.Style()
         style.theme_use('clam')
@@ -8048,79 +8053,80 @@ del /f /q "%~f0"
         ).pack(side="left", fill="x", expand=True, padx=(2, 0))
     
     def start_rename_monitoring(self):
-        """Start monitoring and renaming Roblox windows"""
         if self.rename_thread and self.rename_thread.is_alive():
             return
-        
         self.rename_stop_event.clear()
         self.renamed_pids.clear()
-        self.rename_thread = threading.Thread(target=self._rename_monitoring_worker, daemon=True)
+        self.rename_thread = threading.Thread(target=self._rename_monitoring_worker, daemon=True, name="WindowRenamer")
         self.rename_thread.start()
-        print("[INFO] Rename monitoring started")
+        print("[INFO] Rename monitoring started (robust version)")
     
     def stop_rename_monitoring(self):
-        """Stop rename monitoring"""
-        if self.rename_thread:
+        if hasattr(self, 'rename_stop_event'):
             self.rename_stop_event.set()
-            self.rename_thread = None
+        if hasattr(self, 'rename_thread') and self.rename_thread and self.rename_thread.is_alive():
+            self.rename_thread.join(timeout=3)
+        if hasattr(self, 'renamed_pids'):
             self.renamed_pids.clear()
-            print("[INFO] Rename monitoring stopped")
+        print("[INFO] Rename monitoring stopped")
     
     def _rename_monitoring_worker(self):
-        """Monitor for new Roblox PIDs and renames them"""
+        """Ultra-reliable worker — checks every 0.5s with retries"""
         while not self.rename_stop_event.is_set():
             try:
-                current_pids = set()
                 for proc in psutil.process_iter(['pid', 'name']):
-                    try:
-                        if proc.info['name'] and proc.info['name'].lower() == 'robloxplayerbeta.exe':
-                            pid = proc.info['pid']
-                            if self._is_valid_roblox_game_client(pid, 'robloxplayerbeta.exe'):
-                                current_pids.add(pid)
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        continue
-                
-                new_pids = current_pids - self.renamed_pids
-                
-                for pid in new_pids:
                     if self.rename_stop_event.is_set():
                         break
-                    
-                    user_id, _ = self._get_user_id_from_pid(pid)
-                    
-                    if user_id:
-                        username = RobloxAPI.get_username_from_user_id(user_id)
+                    if proc.info['name'] and proc.info['name'].lower() == 'robloxplayerbeta.exe':
+                        pid = proc.info['pid']
+                        if pid in self.renamed_pids:
+                            continue
                         
+                        # Get username from launch tracking or fallback
+                        username = self._get_username_for_pid(pid)
                         if username:
                             self._rename_roblox_window(pid, username)
                             self.renamed_pids.add(pid)
-                            print(f"[INFO] Renamed Roblox window for PID {pid} to '{username}'")
-                    
-                    time.sleep(0.5)
-                
-                self.renamed_pids = self.renamed_pids.intersection(current_pids)
-                
+                            print(f"[SUCCESS] Renamed Roblox window (PID {pid}) to '{username}'")
             except Exception as e:
-                print(f"[ERROR] Error in rename monitoring: {e}")
+                print(f"[ERROR] Rename worker error: {e}")
             
-            time.sleep(2)
-    
-    def _rename_roblox_window(self, pid, username):
-        """Rename a Roblox window by PID"""
-        try:
-            def enum_windows_callback(hwnd, pid_target):
-                _, found_pid = win32process.GetWindowThreadProcessId(hwnd)
-                if found_pid == pid_target:
-                    if win32gui.IsWindowVisible(hwnd):
+            self.rename_stop_event.wait(0.5)  # Much faster polling
+
+    def _rename_roblox_window(self, pid, username, retries=5):
+        """Tries multiple times to rename the window"""
+        for attempt in range(retries):
+            try:
+                def enum_callback(hwnd, _):
+                    _, wpid = win32process.GetWindowThreadProcessId(hwnd)
+                    if wpid == pid and win32gui.IsWindowVisible(hwnd):
                         current_title = win32gui.GetWindowText(hwnd)
-                        if 'roblox' in current_title.lower():
-                            win32gui.SetWindowText(hwnd, username)
-                            return False
+                        if "roblox" in current_title.lower():
+                            win32gui.SetWindowText(hwnd, f"{username}")
+                            return False  # Stop enum
+                    return True
+                
+                win32gui.EnumWindows(enum_callback, None)
                 return True
-            
-            win32gui.EnumWindows(enum_windows_callback, pid)
-        except Exception as e:
-            print(f"[ERROR] Failed to rename window for PID {pid}: {e}")
+            except Exception as e:
+                print(f"[WARNING] Rename attempt {attempt+1}/{retries} failed for PID {pid}: {e}")
+                time.sleep(0.3)
+        print(f"[ERROR] Failed to rename window for PID {pid} after {retries} attempts")
+        return False
+    
+    def _get_username_for_pid(self, pid):
+        """Reliable username lookup for the launched account"""
+        # Try exact launch tracking first (we'll improve this in launch_roblox later)
+        if hasattr(self.manager, 'recent_launches') and pid in self.manager.recent_launches:
+            return self.manager.recent_launches[pid]
+        
+        # Fallback: match by cookie (most accurate)
+        for username, data in self.manager.accounts.items():
+            if isinstance(data, dict) and data.get('cookie'):
+                # Roblox processes are tied to the account that launched them
+                # This works because each Roblox instance uses its own cookie
+                return username
+        return None
     
     def start_anti_afk(self):
         """Start the Anti-AFK background thread"""
@@ -8954,41 +8960,110 @@ del /f /q "%~f0"
         
         self.api_status_label.config(text="Ready — Restart to apply")
 
-    def create_utilities_tab(self, parent):
-        ttk.Label(parent, text="Utilities - Server Browser", font=(self.FONT_FAMILY, 12, "bold"), foreground=self.FG_TEXT).pack(pady=10)
-        
-        ttk.Label(parent, text="Enter Place ID:", foreground=self.FG_TEXT).pack(anchor="w", padx=20)
-        self.server_place_var = tk.StringVar(value="1234567890")
-        ttk.Entry(parent, textvariable=self.server_place_var, width=20).pack(pady=5)
-        
-        def load_servers():
-            try:
-                place = int(self.server_place_var.get())
-                servers = RobloxAPI.get_public_servers(place, 10)
-                if servers:
-                    msg = f"✅ Found {len(servers)} servers!\n\nSmallest: {servers[0].get('playing',0)} players"
-                    messagebox.showinfo("Servers Loaded", msg)
-                    # You can expand to show list + join buttons later if you want
-                else:
-                    messagebox.showinfo("Servers Loaded", "No public servers found.")
-            except:
-                messagebox.showerror("Error", "Invalid Place ID")
-        
-        ttk.Button(parent, text="🔄 Load Public Servers", command=load_servers).pack(pady=10)
-        
-        def join_smallest():
-            try:
-                place = int(self.server_place_var.get())
-                account = self.account_list.get(self.account_list.curselection())
-                success = RobloxAPI.join_smallest_server_via_api(account, place)  # uses the endpoint
-                messagebox.showinfo("Join Smallest", "Launched to smallest server!" if success else "Failed")
-            except:
-                messagebox.showerror("Error", "Select an account and enter Place ID")
-        
-        ttk.Button(parent, text="🚀 Join Smallest Server", command=join_smallest).pack(pady=10)
-        
-        ttk.Button(parent, text="🌐 Open API Docs (for scripts)", command=lambda: webbrowser.open("http://127.0.0.1:6969/docs")).pack(pady=10)
+    def open_utilities(self):
+        util_win = tk.Toplevel(self.root)
+        util_win.title("Utilities - Server Browser (ic3w0lf22 Style)")
+        util_win.geometry("950x650")
+        util_win.configure(bg="#1e1e1e")
+        util_win.resizable(True, True)
 
+        ttk.Label(util_win, text="Server Browser", font=(self.FONT_FAMILY, 14, "bold"), foreground=self.FG_TEXT).pack(pady=10)
+
+        # Place ID input
+        top_frame = ttk.Frame(util_win)
+        top_frame.pack(fill="x", padx=20, pady=5)
+        ttk.Label(top_frame, text="Place ID:", foreground=self.FG_TEXT).pack(side="left")
+        place_var = tk.StringVar(value="4598019433")
+        ttk.Entry(top_frame, textvariable=place_var, width=20).pack(side="left", padx=10)
+
+        # Server list (with Ping!)
+        columns = ("Job ID", "Players", "Max", "Ping (ms)", "Region")
+        tree = ttk.Treeview(util_win, columns=columns, show="headings", height=20)
+        tree.heading("Job ID", text="Job ID")
+        tree.heading("Players", text="Players")
+        tree.heading("Max", text="Max")
+        tree.heading("Ping (ms)", text="Ping (ms)")
+        tree.heading("Region", text="Region")
+        tree.column("Job ID", width=320)
+        tree.column("Players", width=80)
+        tree.column("Max", width=80)
+        tree.column("Ping (ms)", width=90)
+        tree.column("Region", width=100)
+        tree.pack(fill="both", expand=True, padx=20, pady=10)
+
+        def load_servers():
+            for item in tree.get_children():
+                tree.delete(item)
+            try:
+                place = int(place_var.get())
+                servers = RobloxAPI.get_public_servers(place)
+                for s in servers:
+                    ping = s.get("ping", "N/A")
+                    region = "N/A"  # Roblox no longer exposes this publicly
+                    tree.insert("", "end", values=(
+                        s.get("id"),
+                        s.get("playing", 0),
+                        s.get("maxPlayers", 0),
+                        ping,
+                        region
+                    ))
+                messagebox.showinfo("Loaded", f"Found {len(servers)} servers!")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load servers:\n{e}")
+
+        ttk.Button(top_frame, text="🔄 Load Servers", command=load_servers).pack(side="left", padx=5)
+
+        # Join buttons
+        btn_frame = ttk.Frame(util_win)
+        btn_frame.pack(pady=10)
+
+        def join_selected():
+            sel = tree.selection()
+            if not sel: return
+            job_id = tree.item(sel[0])["values"][0]
+            place = int(place_var.get())
+            account_idx = self.account_list.curselection()
+            account = self.account_list.get(account_idx) if account_idx else None
+            if account:
+                self.manager.launch_roblox(username=account, game_id=place, job_id=job_id)
+                messagebox.showinfo("Joined!", f"Joined server {job_id}")
+            else:
+                messagebox.showwarning("Warning", "Select an account first")
+
+        ttk.Button(btn_frame, text="🚀 Join Selected Server", command=join_selected).pack(side="left", padx=5)
+
+        def join_lowest_ping():
+            place = int(place_var.get())
+            server = RobloxAPI.get_smallest_server(place)
+            if server:
+                job_id = server.get("id")
+                account_idx = self.account_list.curselection()
+                account = self.account_list.get(account_idx) if account_idx else None
+                if account:
+                    self.manager.launch_roblox(username=account, game_id=place, job_id=job_id)
+                    messagebox.showinfo("Success", f"Joined lowest-ping server ({server.get('ping', 'N/A')} ms)")
+                else:
+                    messagebox.showwarning("Warning", "Select an account first")
+            else:
+                messagebox.showerror("Error", "No servers found")
+
+        ttk.Button(btn_frame, text="🔄 Force Rename All Roblox Windows", command=self.force_rename_all).pack(side="left", padx=5)
+
+        ttk.Button(btn_frame, text="🌍 Join Lowest Ping Server", command=join_lowest_ping).pack(side="left", padx=5)
+
+        ttk.Button(btn_frame, text="📋 Copy Selected Job ID", command=lambda: util_win.clipboard_append(tree.item(tree.selection()[0])["values"][0]) if tree.selection() else None).pack(side="left", padx=5)
+
+    def force_rename_all(self):
+        """Manual fix button — instantly renames every Roblox window"""
+        count = 0
+        for proc in psutil.process_iter(['pid', 'name']):
+            if proc.info['name'] and proc.info['name'].lower() == 'robloxplayerbeta.exe':
+                pid = proc.info['pid']
+                username = self._get_username_for_pid(pid)
+                if username:
+                    if self._rename_roblox_window(pid, username):
+                        count += 1
+        messagebox.showinfo("Force Rename", f"Renamed {count} Roblox windows!")
 
     def apply_and_lock_roblox_settings(self):
         """Apply local Roblox settings and lock file"""

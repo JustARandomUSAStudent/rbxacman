@@ -129,12 +129,13 @@ def main():
     try:
         manager = RobloxAccountManager(password=password)
         
-        # === API CONTROLLED BY GUI (new API tab) ===
+        # === API + Auto Cookie Refresh (controlled from GUI) ===
         if manager.get_secure_setting("api_enabled", True):
             import api_server
             threading.Thread(target=api_server.start_api, args=(manager,), daemon=True).start()
-        else:
-            print("⚠️  API disabled (enable in Settings → API tab and restart)")
+        
+        # Start Auto Cookie Refresh thread
+        manager.start_auto_cookie_refresh()
     except ValueError as e:
         messagebox.showerror("Error", "Password is invalid. Please try again.")
         return
